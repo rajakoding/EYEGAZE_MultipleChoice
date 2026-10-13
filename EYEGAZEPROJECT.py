@@ -106,6 +106,7 @@ def gambar_ui(
     indeks_soal,
     indeks_fokus,
     jawaban_terkunci_sementara,
+    status_jawaban_teks,
     progres_kedip,
     landmark_mata,
     arah_val,
@@ -220,19 +221,31 @@ def gambar_ui(
       2,
   )
 
-  persen_kedip = int(progres_kedip * 100)
-  cv2.putText(
-      image,
-      (
-          f"Fokus: {RAW_LABELS[indeks_fokus]} | Tahan Kedip 3s untuk Pilih:"
-          f" {persen_kedip}%"
-      ),
-      (30, 45),
-      cv2.FONT_HERSHEY_SIMPLEX,
-      0.8,
-      (0, 255, 255),
-      2,
-  )
+  if status_jawaban_teks:
+    # Tampilkan notifikasi benar/salah saat jeda
+    cv2.putText(
+        image,
+        status_jawaban_teks,
+        (30, 45),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        1.0,
+        (0, 255, 0) if "BENAR" in status_jawaban_teks else (0, 0, 255),
+        3,
+    )
+  else:
+    persen_kedip = int(progres_kedip * 100)
+    cv2.putText(
+        image,
+        (
+            f"Fokus: {RAW_LABELS[indeks_fokus]} | Tahan Kedip 3s untuk Pilih:"
+            f" {persen_kedip}%"
+        ),
+        (30, 45),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.8,
+        (0, 255, 255),
+        2,
+    )
 
 
 def main():
@@ -245,6 +258,11 @@ def main():
   skor = 0
   selesai = False
   jawaban_terkunci_sementara = None
+  status_jawaban_teks = ""
+
+  # Variabel untuk mengontrol jeda (delay) setelah jawab
+  waktu_jeda_mulai = None
+  JEDA_DURASI = 2.0  # Jeda selama 2 detik
 
   sedang_melirik = False
   AMBANG_BATAS = 0.012
@@ -252,7 +270,7 @@ def main():
   waktu_mulai_kedip = None
   progres_kedip = 0.0
 
-  window_name = "Exam - 5 Questions Math Quiz"
+  window_name = "Exam - Math Quiz with Delay"
   cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
   cv2.setWindowProperty(window_name, cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
 
@@ -280,55 +298,73 @@ def main():
         face_landmarks = results.multi_face_landmarks[0]
         waktu_sekarang = time.time()
 
-        ear = hitung_ear(face_landmarks, frame_w, frame_h)
-        sedang_kedip = ear < EAR_THRESHOLD
-
-        arah_val, landmark_mata_data = deteksi_arah_lirikan_langsung(
-            face_landmarks, frame_w, frame_h
-        )
-
-        if not sedang_kedip:
-          if not sedang_melirik:
-            if arah_val < -AMBANG_BATAS:
-              indeks_fokus = (indeks_fokus - 1) % len(DAFTAR_SOAL[0]["opsi"])
-              sedang_melirik = True
-            elif arah_val > AMBANG_BATAS:
-              indeks_fokus = (indeks_fokus + 1) % len(DAFTAR_SOAL[0]["opsi"])
-              sedang_melirik = True
-          else:
-            if abs(arah_val) < (AMBANG_BATAS / 2):
-              sedang_melirik = False
-
-        if sedang_kedip:
-          if waktu_mulai_kedip is None:
-            waktu_mulai_kedip = waktu_sekarang
-          durasi_kedip = waktu_sekarang - waktu_mulai_kedip
-          progres_kedip = min(durasi_kedip / DWELL_BLINK_TIME, 1.0)
-
-          if durasi_kedip >= DWELL_BLINK_TIME:
-            pilihan_user = RAW_LABELS[indeks_fokus]
-            kunci_jawaban = DAFTAR_SOAL[indeks_soal]["kunci"]
-
-            if pilihan_user == kunci_jawaban:
-              skor += 1
-
-            # Pindah ke soal berikutnya atau akhiri ujian
+        # Jika sedang dalam masa jeda setelah menjawab, abaikan input mata/kedip sementara
+        if waktu_jeda_mulai is not None:
+          if waktu_sekarang - waktu_jeda_mulai >= JEDA_DURASI:
+            waktu_jeda_mulai = None
+            jawaban_terkunci_sementara = None
+            status_jawaban_teks = ""
             indeks_soal += 1
             indeks_fokus = 0
-            waktu_mulai_kedip = None
-            progres_kedip = 0.0
-
             if indeks_soal >= len(DAFTAR_SOAL):
               selesai = True
         else:
-          waktu_mulai_kedip = None
-          progres_kedip = 0.0
+          ear = hitung_ear(face_landmarks, frame_w, frame_h)
+          sedang_kedip = ear < EAR_THRESHOLD
+
+          arah_val, landmark_mata_data = deteksi_arah_lirikan_langsung(
+              face_landmarks, frame_w, frame_h
+          )
+
+          if not sedang_kedip:
+            if not sedang_melirik:
+              if arah_val < -AMBANG_BATAS:
+                indeks_fokus = (indeks_fokus - 1) % len(
+                    DAFTAR_SOAL[indeks_soal]["opsi"]
+                )
+                sedang_melirik = True
+              elif arah_val > AMBANG_BATAS:
+                indeks_fokus = (indeks_fokus + 1) % len(
+                    DAFTAR_SOAL[indeks_soal]["opsi"]
+                )
+                sedang_melirik = True
+            else:
+              if abs(arah_val) < (AMBANG_BATAS / 2):
+                sedang_melirik = False
+
+          if sedang_kedip:
+            if waktu_mulai_kedip is None:
+              waktu_mulai_kedip = waktu_sekarang
+            durasi_kedip = waktu_sekarang - waktu_mulai_kedip
+            progres_kedip = min(durasi_kedip / DWELL_BLINK_TIME, 1.0)
+
+            if durasi_kedip >= DWELL_BLINK_TIME:
+              pilihan_user = RAW_LABELS[indeks_fokus]
+              kunci_jawaban = DAFTAR_SOAL[indeks_soal]["kunci"]
+              jawaban_terkunci_sementara = pilihan_user
+
+              if pilihan_user == kunci_jawaban:
+                skor += 1
+                status_jawaban_teks = f"Jawaban {pilihan_user}: BENAR!"
+              else:
+                status_jawaban_teks = (
+                    f"Jawaban {pilihan_user}: SALAH! (Kunci: {kunci_jawaban})"
+                )
+
+              # Aktifkan waktu jeda
+              waktu_jeda_mulai = time.time()
+              waktu_mulai_kedip = None
+              progres_kedip = 0.0
+          else:
+            waktu_mulai_kedip = None
+            progres_kedip = 0.0
 
       gambar_ui(
           image,
           indeks_soal,
           indeks_fokus,
           jawaban_terkunci_sementara,
+          status_jawaban_teks,
           progres_kedip,
           landmark_mata_data,
           arah_val,
